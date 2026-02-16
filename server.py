@@ -1,56 +1,47 @@
 """ai-knowledge MCP Server v0.1 — AI news, GitHub trending, papers, KOL tweets."""
 
-import os
-import json
-from datetime import datetime
-
 from fastmcp import FastMCP
 import httpx
-from bs4 import BeautifulSoup
+import os
+from datetime import datetime
 
-BRAVE_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "BSAmy1TF2yYdWrwepYxbpWLO3dfnR6K")
+mcp = FastMCP(
+    "ai-knowledge",
+    instructions="AI knowledge hub: news search, GitHub trending, ArXiv papers, KOL tweets",
+)
+
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "BSAmy1TF2yYdWrwepYxbpWLO3dfnR6K")
 XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
 
-mcp = FastMCP("ai-knowledge")
-
-# ── helpers ──────────────────────────────────────────────────────────────
-
-async def _brave_search(query: str, count: int = 5) -> list[dict]:
-    """Call Brave Web Search API with retry on 429."""
-    import asyncio as _aio
-    async with httpx.AsyncClient(timeout=15) as c:
-        for attempt in range(3):
-            r = await c.get(
-                "https://api.search.brave.com/res/v1/web/search",
-                params={"q": query, "count": count, "freshness": "pw"},
-                headers={"X-Subscription-Token": BRAVE_API_KEY, "Accept": "application/json"},
-            )
-            if r.status_code == 429:
-                await _aio.sleep(2 ** attempt)
-                continue
-            r.raise_for_status()
-            results = r.json().get("web", {}).get("results", [])
-            return [{"title": x["title"], "url": x["url"], "snippet": x.get("description", "")} for x in results]
-    return []
-
-
-# ── tools ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
 async def search_ai_news(query: str = "artificial intelligence", limit: int = 5) -> str:
-    """Search the latest AI news via Brave Search.
+    """Search latest AI news via Brave Search API.
 
     Args:
-        query: Search query (default: 'artificial intelligence')
-        limit: Number of results (1-10, default 5)
+        query: Search query (default: "artificial intelligence")
+        limit: Number of results (1-20, default 5)
     """
-    limit = max(1, min(limit, 10))
-    results = await _brave_search(f"{query} AI news", limit)
+    limit = min(max(limit, 1), 20)
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={"X-Subscription-Token": BRAVE_API_KEY, "Accept": "application/json"},
+            params={"q": query, "count": limit, "freshness": "pw"},  # past week
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = data.get("web", {}).get("results", [])
     if not results:
-        return "No results found."
-    lines = []
-    for i, r in enumerate(results, 1):
-        lines.append(f"{i}. **{r['title']}**\n   {r['url']}\n   {r['snippet']}\n")
+        return f"No results found for '{query}'"
+
+    lines = [f"## AI News: {query}\n"]
+    for i, r in enumerate(results[:limit], 1):
+        lines.append(f"**{i}. [{r.get('title', 'Untitled')}]({r.get('url', '')})**")
+        if desc := r.get("description"):
+            lines.append(f"   {desc}")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -59,124 +50,159 @@ async def get_github_trending(language: str = "", since: str = "daily") -> str:
     """Get GitHub trending repositories.
 
     Args:
-        language: Filter by programming language (e.g. 'python'). Empty = all.
-        since: Time range — 'daily', 'weekly', or 'monthly'.
+        language: Filter by programming language (e.g. "python", "rust"). Empty = all.
+        since: Time range: "daily", "weekly", or "monthly"
     """
     url = "https://github.com/trending"
     if language:
         url += f"/{language}"
-    url += f"?since={since}"
+    params = {"since": since}
 
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
-        r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        resp = await client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        html = resp.text
 
-    soup = BeautifulSoup(r.text, "html.parser")
-    repos = []
-    for article in soup.select("article.Box-row")[:15]:
-        h2 = article.select_one("h2 a")
-        if not h2:
+    import re
+    articles = re.findall(r'<article class="Box-row">(.*?)</article>', html, re.DOTALL)
+
+    lines = [f"## GitHub Trending ({since}){f' — {language}' if language else ''}\n"]
+    for i, article in enumerate(articles[:10]):
+        # Extract repo from stargazers link pattern /owner/repo/stargazers
+        repo_match = re.search(r'href="(/[^/]+/[^/]+)/stargazers"', article)
+        if not repo_match:
             continue
-        name = h2.get_text(strip=True).replace("\n", "").replace(" ", "")
-        desc_p = article.select_one("p")
-        desc = desc_p.get_text(strip=True) if desc_p else ""
-        stars_span = article.select_one("span.d-inline-block.float-sm-right")
-        stars = stars_span.get_text(strip=True) if stars_span else ""
-        lang_span = article.select_one("span[itemprop='programmingLanguage']")
-        lang = lang_span.get_text(strip=True) if lang_span else ""
-        repos.append(f"• **{name}** ({lang}) ⭐ {stars}\n  {desc}")
+        repo_path = repo_match.group(1)
+        repo_name = repo_path.lstrip("/")
 
-    if not repos:
-        return "Could not parse GitHub trending page."
-    return f"GitHub Trending ({since}):\n\n" + "\n\n".join(repos)
+        desc_match = re.search(r'<p class="col-9[^"]*">\s*(.+?)\s*</p>', article)
+        desc = desc_match.group(1).strip() if desc_match else ""
+
+        star_match = re.search(r'([\d,]+)\s*stars today', article)
+        star = star_match.group(1) if star_match else "?"
+
+        lines.append(f"**{i+1}. [{repo_name}](https://github.com{repo_path})** ⭐ {star}/day")
+        if desc:
+            lines.append(f"   {desc}")
+        lines.append("")
+
+    return "\n".join(lines) if len(lines) > 1 else "Could not parse trending repos. Try again later."
 
 
 @mcp.tool()
-async def get_ai_papers(topic: str = "large language model", limit: int = 5) -> str:
+async def get_ai_papers(topic: str = "artificial intelligence", limit: int = 5) -> str:
     """Search recent AI papers on ArXiv.
 
     Args:
-        topic: Search topic (default: 'large language model')
-        limit: Number of papers (1-10, default 5)
+        topic: Search topic (default: "artificial intelligence")
+        limit: Number of papers (1-20, default 5)
     """
-    limit = max(1, min(limit, 10))
-    query = topic.replace(" ", "+")
-    api_url = (
-        f"http://export.arxiv.org/api/query?search_query=all:{query}"
-        f"&sortBy=submittedDate&sortOrder=descending&max_results={limit}"
-    )
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(api_url)
-        r.raise_for_status()
+    limit = min(max(limit, 1), 20)
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            "https://export.arxiv.org/api/query",
+            params={
+                "search_query": f"all:{topic}",
+                "start": 0,
+                "max_results": limit,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+            },
+        )
+        resp.raise_for_status()
+        xml = resp.text
 
-    soup = BeautifulSoup(r.text, "xml")
-    entries = soup.find_all("entry")
+    import re
+    entries = re.findall(r"<entry>(.*?)</entry>", xml, re.DOTALL)
     if not entries:
-        return "No papers found."
+        return f"No papers found for '{topic}'"
 
-    lines = []
-    for i, e in enumerate(entries, 1):
-        title = e.find("title").get_text(strip=True).replace("\n", " ")
-        published = e.find("published").get_text(strip=True)[:10]
-        link = e.find("id").get_text(strip=True)
-        summary = e.find("summary").get_text(strip=True).replace("\n", " ")[:200]
-        authors = ", ".join(a.find("name").get_text(strip=True) for a in e.find_all("author")[:3])
-        if len(e.find_all("author")) > 3:
-            authors += " et al."
-        lines.append(f"{i}. **{title}**\n   {authors} | {published}\n   {link}\n   {summary}…\n")
+    lines = [f"## ArXiv Papers: {topic}\n"]
+    for i, entry in enumerate(entries[:limit], 1):
+        title = re.search(r"<title>(.*?)</title>", entry, re.DOTALL)
+        title = title.group(1).strip().replace("\n", " ") if title else "Untitled"
+        
+        summary = re.search(r"<summary>(.*?)</summary>", entry, re.DOTALL)
+        summary = summary.group(1).strip().replace("\n", " ")[:200] if summary else ""
+        
+        link = re.search(r'<id>(.*?)</id>', entry)
+        link = link.group(1).strip() if link else ""
+        
+        published = re.search(r"<published>(.*?)</published>", entry)
+        published = published.group(1)[:10] if published else ""
+
+        authors = re.findall(r"<name>(.*?)</name>", entry)
+        author_str = ", ".join(authors[:3])
+        if len(authors) > 3:
+            author_str += " et al."
+
+        lines.append(f"**{i}. {title}**")
+        lines.append(f"   {author_str} | {published}")
+        lines.append(f"   {link}")
+        if summary:
+            lines.append(f"   > {summary}...")
+        lines.append("")
+
     return "\n".join(lines)
 
 
 @mcp.tool()
-async def search_kol_tweets(query: str = "AI LLM") -> str:
-    """Search AI KOL tweets/posts via Brave Search (X/Twitter results).
+async def search_kol_tweets(query: str = "AI") -> str:
+    """Search AI KOL tweets via Brave Search (Twitter/X results).
 
     Args:
-        query: Search query for AI KOL opinions
+        query: Search query for AI KOL content
     """
-    kols = "@karpathy OR @ylecun OR @dotey OR @sama OR @AndrewYNg"
-    results = await _brave_search(f"site:x.com ({kols}) {query}", 8)
+    search_query = f"site:x.com {query}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={"X-Subscription-Token": BRAVE_API_KEY, "Accept": "application/json"},
+            params={"q": search_query, "count": 10, "freshness": "pw"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = data.get("web", {}).get("results", [])
     if not results:
-        return "No KOL tweets found."
-    lines = []
-    for i, r in enumerate(results, 1):
-        lines.append(f"{i}. **{r['title']}**\n   {r['url']}\n   {r['snippet']}\n")
+        return f"No KOL tweets found for '{query}'"
+
+    lines = [f"## AI KOL Tweets: {query}\n"]
+    for i, r in enumerate(results[:8], 1):
+        lines.append(f"**{i}. [{r.get('title', '')}]({r.get('url', '')})**")
+        if desc := r.get("description"):
+            lines.append(f"   {desc[:200]}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
-# ── resource ─────────────────────────────────────────────────────────────
-
 @mcp.resource("daily://ai-briefing")
 async def daily_briefing() -> str:
-    """Today's AI briefing: top news + trending repos + latest papers."""
+    """Today's AI briefing — aggregates news, trending repos, and latest papers."""
     today = datetime.now().strftime("%Y-%m-%d")
-    sections = []
+    sections = [f"# 🤖 AI Daily Briefing — {today}\n"]
 
-    # News
     try:
-        news = await search_ai_news("AI breakthrough", 5)
-        sections.append(f"📰 AI News\n{news}")
+        news = await search_ai_news("AI breakthroughs OR AI launch OR LLM", limit=5)
+        sections.append(news)
     except Exception as e:
-        sections.append(f"📰 AI News\n⚠️ Error: {e}")
+        sections.append(f"*News unavailable: {e}*\n")
 
-    # GitHub
     try:
-        gh = await get_github_trending(since="daily")
-        sections.append(f"🔥 {gh}")
+        trending = await get_github_trending(language="python", since="daily")
+        sections.append(trending)
     except Exception as e:
-        sections.append(f"🔥 GitHub Trending\n⚠️ Error: {e}")
+        sections.append(f"*Trending unavailable: {e}*\n")
 
-    # Papers
     try:
-        papers = await get_ai_papers("large language model", 3)
-        sections.append(f"📄 Latest Papers\n{papers}")
+        papers = await get_ai_papers("large language model", limit=3)
+        sections.append(papers)
     except Exception as e:
-        sections.append(f"📄 Papers\n⚠️ Error: {e}")
+        sections.append(f"*Papers unavailable: {e}*\n")
 
-    return f"# AI Daily Briefing — {today}\n\n" + "\n\n---\n\n".join(sections)
+    return "\n---\n".join(sections)
 
-
-# ── main ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     mcp.run()
