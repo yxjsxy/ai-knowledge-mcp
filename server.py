@@ -10,7 +10,7 @@ mcp = FastMCP(
     instructions="AI knowledge hub: news search, GitHub trending, ArXiv papers, KOL tweets",
 )
 
-BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "BSAmy1TF2yYdWrwepYxbpWLO3dfnR6K")
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
 
 
@@ -98,7 +98,7 @@ async def get_ai_papers(topic: str = "artificial intelligence", limit: int = 5) 
         limit: Number of papers (1-20, default 5)
     """
     limit = min(max(limit, 1), 20)
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         resp = await client.get(
             "https://export.arxiv.org/api/query",
             params={
