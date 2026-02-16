@@ -4,46 +4,87 @@ AI knowledge aggregator via [MCP](https://modelcontextprotocol.io) — search ne
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `search_ai_news` | Search latest AI news (Brave Search) |
-| `get_github_trending` | GitHub trending repos (scrape) |
-| `get_ai_papers` | ArXiv paper search |
-| `search_kol_tweets` | AI KOL tweets via Grok/xAI |
+| Tool | Description | API Key Required |
+|------|-------------|-----------------|
+| `search_ai_news` | Search latest AI news | Brave Search API |
+| `get_github_trending` | GitHub trending repos | ❌ None |
+| `get_ai_papers` | ArXiv paper search | ❌ None |
+| `search_kol_tweets` | AI KOL tweets search | Brave Search API |
 
 ## Resource
 
 | URI | Description |
 |-----|-------------|
-| `daily://ai-briefing` | Combined daily AI briefing |
+| `daily://ai-briefing` | Combined daily AI briefing (news + trending + papers) |
 
-## Setup
+---
+
+## Quick Start
 
 ```bash
-cd ai_knowledge_mcp
+git clone https://github.com/yxjsxy/ai-knowledge-mcp.git
+cd ai-knowledge-mcp
 python3 -m venv .venv && source .venv/bin/activate
-pip install fastmcp httpx beautifulsoup4
-
-# Set API keys
-export BRAVE_API_KEY="your_key"
-export XAI_API_KEY="your_key"    # optional, for KOL tweets
+pip install fastmcp httpx
 ```
+
+---
+
+## 🔑 API Keys Setup
+
+### Brave Search API (Required for news & tweet search)
+
+1. Go to [https://brave.com/search/api/](https://brave.com/search/api/)
+2. Click **"Get Started for Free"**
+3. Sign up with email (or GitHub/Google)
+4. Choose **"Free" plan** — 2,000 queries/month, no credit card needed
+5. Go to [API Keys](https://api.search.brave.com/app/keys) dashboard
+6. Click **"Add API Key"**, give it a name (e.g. `ai-knowledge`)
+7. Copy the key (starts with `BSA...`)
+
+### Grok / xAI API (Optional, for enhanced KOL tweet search)
+
+> Coming soon — will provide direct X/Twitter search via Grok API
+
+1. Go to [https://console.x.ai/](https://console.x.ai/)
+2. Sign up and create an API key
+3. Copy the key (starts with `xai-...`)
+
+### Configure Keys
+
+Create a `.env` file in the project root (**this file is git-ignored and never committed**):
+
+```bash
+# .env — DO NOT COMMIT THIS FILE
+BRAVE_API_KEY=BSAxxxxxxxxxxxxxxxxxxxxx
+XAI_API_KEY=xai-xxxxxxxxxxxxxxxxxxxxx   # optional
+```
+
+Or export as environment variables:
+
+```bash
+export BRAVE_API_KEY="BSAxxxxxxxxxxxxxxxxxxxxx"
+export XAI_API_KEY="xai-xxxxxxxxxxxxxxxxxxxxx"   # optional
+```
+
+> ⚠️ **Security**: API keys are loaded from environment variables only. They are NEVER hardcoded in source code. The `.env` file is in `.gitignore`.
+
+---
 
 ## Run
 
 ```bash
-# Inspector (dev/test)
+# Dev mode with Inspector UI (test tools interactively)
 fastmcp dev server.py
 
 # Install in Claude Desktop
 fastmcp install server.py --name "AI Knowledge" \
-  -e BRAVE_API_KEY="$BRAVE_API_KEY" \
-  -e XAI_API_KEY="$XAI_API_KEY"
+  -e BRAVE_API_KEY="$BRAVE_API_KEY"
 ```
 
 ## Claude Desktop Config
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Alternatively, add manually to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -52,10 +93,30 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "command": "/path/to/ai_knowledge_mcp/.venv/bin/python",
       "args": ["/path/to/ai_knowledge_mcp/server.py"],
       "env": {
-        "BRAVE_API_KEY": "your_key",
-        "XAI_API_KEY": "your_key"
+        "BRAVE_API_KEY": "your_brave_api_key_here"
       }
     }
   }
 }
 ```
+
+## Cursor / Windsurf / Other MCP Clients
+
+Most MCP clients support stdio transport. Point them to:
+- **Command**: `/path/to/.venv/bin/python`
+- **Args**: `/path/to/server.py`
+- **Env**: `BRAVE_API_KEY=...`
+
+---
+
+## Roadmap
+
+- [ ] Grok API integration for real-time X/Twitter search
+- [ ] Hacker News top stories tool
+- [ ] Reddit AI subreddit search
+- [ ] Fallback search (DuckDuckGo) when no API key configured
+- [ ] Caching layer for rate limit management
+
+## License
+
+MIT
