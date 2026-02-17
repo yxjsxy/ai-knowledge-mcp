@@ -6,8 +6,13 @@ import os
 import re
 from datetime import datetime
 
+import json as _json
+import subprocess
+
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAH086KFi7ggyU0mBckyHUNlwsWtxZXjxU")
 
 mcp = FastMCP(
     "ai-knowledge",
@@ -33,7 +38,48 @@ def _get_chroma():
     return chromadb.PersistentClient(path=VECTORDB_DIR)
 
 
-# ── Semantic Search (NEW) ──────────────────────────────────
+def _gemini_rerank(query: str, results: list[dict], top_k: int = 5) -> list[dict]:
+    """Use Gemini Flash to rerank search results."""
+    if not results or len(results) <= top_k:
+        return results[:top_k]
+
+    candidates = []
+    for i, r in enumerate(results):
+        candidates.append(f"[{i}] {r.get('title', '')} | {r['text'][:150]}")
+    candidates_text = "\n".join(candidates)
+
+    prompt = f"""You are a relevance scorer. Given a query and candidate documents, return the indices of the top {top_k} most relevant documents, ordered by relevance (most relevant first).
+
+Query: {query}
+
+Candidates:
+{candidates_text}
+
+Return ONLY a JSON array of indices, e.g. [3, 0, 7, 1, 5]. No explanation."""
+
+    try:
+        env = {**os.environ, "GEMINI_API_KEY": GEMINI_API_KEY}
+        result = subprocess.run(
+            ["gemini", "-p", prompt],
+            capture_output=True, text=True, timeout=30, env=env
+        )
+        output = result.stdout.strip()
+        match = re.search(r'\[[\d,\s]+\]', output)
+        if match:
+            indices = _json.loads(match.group())
+            reranked = []
+            for idx in indices[:top_k]:
+                if 0 <= idx < len(results):
+                    results[idx]["rerank_score"] = top_k - len(reranked)
+                    reranked.append(results[idx])
+            return reranked
+    except Exception:
+        pass
+
+    return results[:top_k]
+
+
+# ── Semantic Search ──────────────────────────────────────
 
 @mcp.tool()
 async def semantic_search(
@@ -42,8 +88,9 @@ async def semantic_search(
     limit: int = 10,
     date_from: str = "",
     date_to: str = "",
+    rerank: bool = False,
 ) -> str:
-    """语义搜索 AI 知识库。支持按数据源和日期范围过滤。
+    """语义搜索 AI 知识库。支持按数据源和日期范围过滤，可选 Gemini rerank 提升精度。
 
     Args:
         query: 搜索查询（中英文均可）
@@ -51,6 +98,7 @@ async def semantic_search(
         limit: 返回数量 (1-20, default 10)
         date_from: 开始日期 YYYYMMDD（可选）
         date_to: 结束日期 YYYYMMDD（可选）
+        rerank: 是否启用 Gemini rerank 提升相关性（默认关闭）
     """
     limit = min(max(limit, 1), 20)
     client = _get_chroma()
@@ -105,14 +153,38 @@ async def semantic_search(
             pass
 
     all_results.sort(key=lambda x: x["score"], reverse=True)
-    top = all_results[:limit]
+
+    # Deduplicate by URL+title (same article across different dates)
+    seen = set()
+    deduped = []
+    for r in all_results:
+        dedup_key = (r.get("url", "") or "", r.get("title", "") or "")
+        if dedup_key != ("", "") and dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        deduped.append(r)
+
+    # Rerank if requested
+    fetch_limit = min(limit * 3, len(deduped)) if rerank else limit
+    candidates = deduped[:fetch_limit]
+
+    if rerank and len(candidates) > limit:
+        top = _gemini_rerank(query, candidates, top_k=limit)
+    else:
+        top = candidates[:limit]
 
     if not top:
         return f"未找到与 '{query}' 相关的结果"
 
-    lines = [f"## 🔍 语义搜索: {query}\n"]
+    lines = [f"## 🔍 语义搜索: {query}"]
+    if rerank:
+        lines[0] += " (Gemini reranked)"
+    lines.append("")
     for i, r in enumerate(top, 1):
-        lines.append(f"**{i}. [{r['collection']}] {r['title'] or '(untitled)'}** (score: {r['score']})")
+        score_str = f"score: {r['score']}"
+        if "rerank_score" in r:
+            score_str += f", rerank: {r['rerank_score']}"
+        lines.append(f"**{i}. [{r['collection']}] {r['title'] or '(untitled)'}** ({score_str})")
         lines.append(f"   📅 {r['date']}  🔗 {r['url']}")
         lines.append(f"   {r['text'][:200]}...")
         lines.append("")
