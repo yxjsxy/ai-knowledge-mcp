@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 
 import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 mcp = FastMCP(
     "ai-knowledge",
@@ -16,9 +17,17 @@ mcp = FastMCP(
 BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
 VECTORDB_DIR = os.path.join(os.path.dirname(__file__), "..", "ai_knowledge", "vectordb")
+EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 
 COLLECTION_NAMES = ["ai_tweets", "ai_articles", "ai_fulltext", "ai_github", "ai_kol_tweets"]
 
+_embedding_fn = None
+
+def _get_embedding_fn():
+    global _embedding_fn
+    if _embedding_fn is None:
+        _embedding_fn = SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+    return _embedding_fn
 
 def _get_chroma():
     return chromadb.PersistentClient(path=VECTORDB_DIR)
@@ -72,7 +81,7 @@ async def semantic_search(
     all_results = []
     for cname in collections:
         try:
-            coll = client.get_collection(cname)
+            coll = client.get_collection(cname, embedding_function=_get_embedding_fn())
             kwargs = {"query_texts": [query], "n_results": limit}
             if where:
                 kwargs["where"] = where
@@ -120,7 +129,7 @@ async def kb_stats() -> str:
 
     for cname in COLLECTION_NAMES:
         try:
-            coll = client.get_collection(cname)
+            coll = client.get_collection(cname, embedding_function=_get_embedding_fn())
             n = coll.count()
             total += n
             # Get date range
