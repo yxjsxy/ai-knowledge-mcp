@@ -1,11 +1,12 @@
 # ai-knowledge MCP Server
 
-AI knowledge aggregator via [MCP](https://modelcontextprotocol.io) — search news, GitHub trending, ArXiv papers, and AI KOL tweets.
+AI knowledge aggregator via [MCP](https://modelcontextprotocol.io) — semantic search over local ChromaDB + live news/GitHub/papers/KOL tools.
 
 ## Tools
 
 | Tool | Description | API Key Required |
 |------|-------------|-----------------|
+| `semantic_search` | 语义搜索本地 AI 向量知识库（支持 source/date filter + 可选 rerank） | ❌ None |
 | `search_ai_news` | Search latest AI news | Brave Search API |
 | `get_github_trending` | GitHub trending repos | ❌ None |
 | `get_ai_papers` | ArXiv paper search | ❌ None |
@@ -16,6 +17,7 @@ AI knowledge aggregator via [MCP](https://modelcontextprotocol.io) — search ne
 | URI | Description |
 |-----|-------------|
 | `daily://ai-briefing` | Combined daily AI briefing (news + trending + papers) |
+| `stats://knowledge-base` | 向量知识库统计（collection 数量、日期范围、磁盘占用） |
 
 ---
 

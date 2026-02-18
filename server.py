@@ -204,12 +204,19 @@ async def kb_stats() -> str:
             coll = client.get_collection(cname, embedding_function=_get_embedding_fn())
             n = coll.count()
             total += n
-            # Get date range
-            sample = coll.get(include=["metadatas"], limit=1)
-            if sample["metadatas"]:
-                lines.append(f"- **{cname}**: {n} records")
-            else:
-                lines.append(f"- **{cname}**: {n} records")
+
+            date_range = "-"
+            if n > 0:
+                meta_rows = coll.get(include=["metadatas"])
+                dates = sorted(
+                    m.get("date", "")
+                    for m in (meta_rows.get("metadatas") or [])
+                    if m and m.get("date")
+                )
+                if dates:
+                    date_range = f"{dates[0]} → {dates[-1]}"
+
+            lines.append(f"- **{cname}**: {n} records | 📅 {date_range}")
         except Exception:
             lines.append(f"- **{cname}**: (not found)")
 
